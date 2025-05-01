@@ -1,0 +1,510 @@
+import 'package:flutter/material.dart';
+import 'package:magicboxv2/models/box.dart';
+import 'package:magicboxv2/screens/box_detail_screen.dart';
+import 'package:magicboxv2/screens/box_id_recognition_screen.dart';
+import 'package:magicboxv2/services/database_helper.dart';
+import 'package:magicboxv2/services/category_service.dart';
+
+class BoxesScreen extends StatefulWidget {
+  const BoxesScreen({super.key});
+  
+  // Criar uma factory para obter uma instância com GlobalKey
+  static BoxesScreen create() {
+    return BoxesScreen(key: GlobalKey<BoxesScreenState>());
+  }
+
+  @override
+  State<BoxesScreen> createState() => BoxesScreenState();
+}
+
+class BoxesScreenState extends State<BoxesScreen> {
+  final DatabaseHelper _databaseHelper = DatabaseHelper.instance;
+  final CategoryService _categoryService = CategoryService.instance;
+  List<Box> _boxes = [];
+  List<Box> _filteredBoxes = [];
+  String _searchQuery = '';
+  String? _selectedCategory;
+  final TextEditingController _searchController = TextEditingController();
+  bool _isLoading = true;
+  List<String> _categories = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBoxes();
+    _loadCategories();
+  }
+  
+  Future<void> _loadCategories() async {
+    try {
+      final categories = await _categoryService.getCategories();
+      setState(() {
+        _categories = categories;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar categorias: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _loadBoxes() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final boxes = await _databaseHelper.readAllBoxes();
+      setState(() {
+        _boxes = boxes;
+        _applyFilters();
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao carregar caixas: $e')),
+        );
+      }
+    }
+  }
+
+  void _applyFilters() {
+    setState(() {
+      _filteredBoxes = _boxes.where((box) {
+        // Filtrar por categoria se uma estiver selecionada
+        if (_selectedCategory != null && _selectedCategory != 'Todas') {
+          if (box.category != _selectedCategory) {
+            return false;
+          }
+        }
+
+        // Filtrar por texto de busca
+        if (_searchQuery.isNotEmpty) {
+          final query = _searchQuery.toLowerCase();
+          return box.name.toLowerCase().contains(query) ||
+              box.category.toLowerCase().contains(query) ||
+              (box.description?.toLowerCase().contains(query) ?? false) ||
+              box.formattedId.contains(query);
+        }
+
+        return true;
+      }).toList();
+    });
+  }
+
+  void _onSearchChanged(String query) {
+    setState(() {
+      _searchQuery = query;
+      _applyFilters();
+    });
+  }
+
+  void _selectCategory(String? category) {
+    setState(() {
+      _selectedCategory = category;
+      _applyFilters();
+    });
+  }
+
+  void _navigateToBoxDetail(Box box) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => BoxDetailScreen(box: box),
+      ),
+    ).then((_) => _loadBoxes());
+  }
+
+  void _navigateToBoxIdRecognition() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const BoxIdRecognitionScreen(),
+      ),
+    ).then((_) => _loadBoxes());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        children: [
+          // Barra de pesquisa
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: _searchController,
+              onChanged: _onSearchChanged,
+              decoration: InputDecoration(
+                hintText: 'Pesquisar caixas',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ),
+
+          // Filtros de categoria
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              children: [
+                _buildCategoryChip('Todas', _selectedCategory == null),
+                ..._categories.map((category) => 
+                  _buildCategoryChip(category, _selectedCategory == category)
+                ).toList(),
+                // Botão para adicionar nova categoria
+                Padding(
+                  padding: const EdgeInsets.only(left: 8.0),
+                  child: ActionChip(
+                    avatar: const Icon(Icons.add, size: 18),
+                    label: const Text('Nova Categoria'),
+                    onPressed: _showAddCategoryDialog,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // Lista de caixas
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _filteredBoxes.isEmpty
+                    ? const Center(child: Text('Nenhuma caixa encontrada'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16.0),
+                        itemCount: _filteredBoxes.length,
+                        itemBuilder: (context, index) {
+                          final box = _filteredBoxes[index];
+                          return _buildBoxCard(box);
+                        },
+                      ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: showAddBoxDialog,
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  Widget _buildCategoryChip(String category, bool isSelected) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8.0),
+      child: FilterChip(
+        label: Text(category),
+        selected: isSelected,
+        onSelected: (selected) {
+          _selectCategory(selected ? category : null);
+        },
+      ),
+    );
+  }
+  
+  Future<void> _showAddCategoryDialog() async {
+    final TextEditingController categoryController = TextEditingController();
+    
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Nova Categoria'),
+        content: TextField(
+          controller: categoryController,
+          decoration: const InputDecoration(
+            labelText: 'Nome da Categoria',
+            border: OutlineInputBorder(),
+          ),
+          textCapitalization: TextCapitalization.words,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (categoryController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Nome da categoria é obrigatório')),
+                );
+                return;
+              }
+              Navigator.pop(context, categoryController.text.trim());
+            },
+            child: const Text('Salvar'),
+          ),
+        ],
+      ),
+    );
+    
+    if (result != null && result.isNotEmpty) {
+      try {
+        final success = await _categoryService.addCategory(result);
+        if (success) {
+          await _loadCategories();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Categoria "$result" adicionada com sucesso!')),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Não foi possível adicionar a categoria. Verifique se ela já existe.')),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erro ao adicionar categoria: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  Widget _buildBoxCard(Box box) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16.0),
+      child: InkWell(
+        onTap: () => _navigateToBoxDetail(box),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              // Ícone da caixa
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.inventory_2),
+              ),
+              const SizedBox(width: 16),
+              
+              // Informações da caixa
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          box.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '#${box.formattedId}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      box.category,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.secondary,
+                      ),
+                    ),
+                    if (box.description != null && box.description!.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        box.description!,
+                        style: const TextStyle(fontSize: 14),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              
+              // Menu de opções
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    // Implementar edição de caixa
+                  } else if (value == 'delete') {
+                    // Implementar exclusão de caixa
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Row(
+                      children: [
+                        Icon(Icons.edit),
+                        SizedBox(width: 8),
+                        Text('Editar'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete),
+                        SizedBox(width: 8),
+                        Text('Excluir'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+  
+  Future<void> showAddBoxDialog() async {
+    final TextEditingController nameController = TextEditingController();
+    final TextEditingController descriptionController = TextEditingController();
+    String selectedCategory = 'Diversos';
+    
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Nova Caixa'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Nome da Caixa',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: selectedCategory,
+                  decoration: const InputDecoration(
+                    labelText: 'Categoria',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'Ferramentas', child: Text('Ferramentas')),
+                    DropdownMenuItem(value: 'Eletrônicos', child: Text('Eletrônicos')),
+                    DropdownMenuItem(value: 'Documentos', child: Text('Documentos')),
+                    DropdownMenuItem(value: 'Diversos', child: Text('Diversos')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        selectedCategory = value;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Descrição (opcional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (nameController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Nome da caixa é obrigatório')),
+                  );
+                  return;
+                }
+                
+                Navigator.pop(context, {
+                  'name': nameController.text.trim(),
+                  'category': selectedCategory,
+                  'description': descriptionController.text.trim().isNotEmpty
+                      ? descriptionController.text.trim()
+                      : null,
+                });
+              },
+              child: const Text('Salvar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    
+    if (result != null) {
+      final now = DateTime.now().toIso8601String();
+      final newBox = Box(
+        name: result['name'],
+        category: result['category'],
+        description: result['description'],
+        createdAt: now,
+      );
+      
+      try {
+        await _databaseHelper.createBox(newBox);
+        await _loadBoxes();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Caixa criada com sucesso!')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erro ao criar caixa: $e')),
+          );
+        }
+      }
+    }
+  }
+}
