@@ -24,6 +24,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _availableLanguages = [];
   List<String> _availableVoices = [];
   String _selectedVoice = '';
+  
+  // Variáveis para o sistema de logs
+  bool _logsEnabled = true;
+  String _recentLogs = '';
+  bool _isLoadingLogs = false;
 
   @override
   void initState() {
@@ -86,16 +91,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _ttsLanguage = prefs.getString('ttsLanguage') ?? 'pt-BR';
         _selectedVoice = prefs.getString('ttsVoice') ?? '';
         
+        // Carregar configurações de logs
+        _logsEnabled = _logService.isLogEnabled;
+        
         final apiKey = prefs.getString('geminiApiKey') ?? '';
         _apiKeyController.text = apiKey;
         
         _isLoading = false;
       });
+      
+      // Carregar logs recentes
+      _loadRecentLogs();
     } catch (e) {
       setState(() {
         _isLoading = false;
       });
       _logService.error('Erro ao carregar configurações: $e');
+    }
+  }
+
+  Future<void> _loadRecentLogs() async {
+    if (!mounted) return;
+    
+    setState(() {
+      _isLoadingLogs = true;
+    });
+    
+    try {
+      // Carregar logs recentes (últimas 100 linhas)
+      final logs = await _logService.getRecentLogs(maxLines: 100);
+      
+      if (mounted) {
+        setState(() {
+          _recentLogs = logs;
+          _isLoadingLogs = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _recentLogs = 'Erro ao carregar logs: $e';
+          _isLoadingLogs = false;
+        });
+      }
     }
   }
 
@@ -110,6 +148,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await prefs.setString('ttsLanguage', _ttsLanguage);
       await prefs.setString('ttsVoice', _selectedVoice);
       await prefs.setString('geminiApiKey', _apiKeyController.text);
+      
+      // Salvar configurações de logs
+      await _logService.setLogEnabled(_logsEnabled);
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -364,6 +405,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
+                  
+                  // Seção de Logs
+                  Card(
+                    margin: const EdgeInsets.only(bottom: 24),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildSectionHeader('Sistema de Logs'),
+                          
+                          // Switch para ativar/desativar logs
+                          SwitchListTile(
+                            title: const Text('Ativar sistema de logs'),
+                            subtitle: const Text('Registra informações do sistema para depuração'),
+                            value: _logsEnabled,
+                            onChanged: (value) {
+                              setState(() {
+                                _logsEnabled = value;
+                              });
+                            },
+                          ),
+                          
+                          const SizedBox(height: 16),
+                          
+                          // Botões de ação para os logs
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: _loadRecentLogs,
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('Atualizar Logs'),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () async {
+                                    await _logService.clearLogs();
+                                    _loadRecentLogs();
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('Logs limpos com sucesso')),
+                                      );
+                                    }
+                                  },
+                                  icon: const Icon(Icons.delete),
+                                  label: const Text('Limpar Logs'),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          
+                          const SizedBox(height: 16),
+                          
+                          // Visualização dos logs recentes
+                          const Text(
+                            'Logs Recentes:',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            height: 200,
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: _isLoadingLogs
+                                ? const Center(child: CircularProgressIndicator())
+                                : SingleChildScrollView(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: SelectableText(
+                                        _recentLogs,
+                                        style: const TextStyle(
+                                          color: Colors.greenAccent,
+                                          fontFamily: 'monospace',
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   
                   // Botão Salvar
                   ElevatedButton(

@@ -1,255 +1,159 @@
 import 'dart:io';
-import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:magicboxv2/models/box.dart';
 import 'package:magicboxv2/models/item.dart';
 import 'package:magicboxv2/services/database_helper.dart';
 import 'package:magicboxv2/services/gemini_service.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 class ObjectRecognitionScreen extends StatefulWidget {
-  final List<Box> boxes;
+  final String imagePath;
+  final int boxId;
+  final Function? onItemAdded;
   
   const ObjectRecognitionScreen({
     super.key,
-    required this.boxes,
+    required this.imagePath,
+    required this.boxId,
+    this.onItemAdded,
   });
 
   @override
-  _ObjectRecognitionScreenState createState() => _ObjectRecognitionScreenState();
+  State<ObjectRecognitionScreen> createState() => _ObjectRecognitionScreenState();
 }
 
 class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen> {
   final GeminiService _geminiService = GeminiService();
   final DatabaseHelper _databaseHelper = DatabaseHelper.instance;
-  final ImagePicker _picker = ImagePicker();
   
-  XFile? _imageFile;
-  bool _isProcessing = false;
+  bool _isProcessing = true;
   String? _errorMessage;
   Map<String, dynamic>? _objectInfo;
+  Box? _currentBox;
   
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
   String? _selectedCategory;
-  int? _selectedBoxId;
 
   @override
   void initState() {
     super.initState();
-    if (widget.boxes.isNotEmpty) {
-      _selectedBoxId = widget.boxes.first.id;
+    _loadBoxInfo();
+    _processImage();
+  }
+
+  Future<void> _loadBoxInfo() async {
+    try {
+      final box = await _databaseHelper.readBox(widget.boxId);
+      setState(() {
+        _currentBox = box;
+        _selectedCategory = box?.category;
+      });
+    } catch (e) {
+      print('Erro ao carregar informações da caixa: $e');
     }
   }
 
-  String? _savedImagePath;
-
-  Future<void> _takePhoto() async {
+  Future<void> _processImage() async {
     setState(() {
-      _imageFile = null;
-      _objectInfo = null;
+      _isProcessing = true;
       _errorMessage = null;
-      _savedImagePath = null;
     });
 
     try {
-      final XFile? photo = await _picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 80,
-        maxWidth: 800,
-      );
-
-      if (photo != null) {
-        setState(() {
-          _imageFile = photo;
-          _isProcessing = true;
-        });
-
-        // Salvar a imagem no dispositivo
-        final savedImagePath = await _saveImageToDevice(photo);
-        if (savedImagePath != null) {
-          _savedImagePath = savedImagePath;
-        }
-
-        // Analisar objeto
-        final objectInfo = await _geminiService.analyzeObject(photo);
-
-        if (objectInfo != null) {
-          setState(() {
-            _objectInfo = objectInfo;
-            _nameController.text = objectInfo['name'] ?? '';
-            _descriptionController.text = objectInfo['description'] ?? '';
-            _selectedCategory = objectInfo['category'] ?? 'Diversos';
-            _isProcessing = false;
-          });
-        } else {
-          setState(() {
-            _errorMessage = 'Não foi possível analisar o objeto na imagem';
-            _isProcessing = false;
-          });
-        }
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Erro ao capturar ou processar a imagem: $e';
-        _isProcessing = false;
-      });
-    }
-  }
-
-  Future<void> _pickImageFromGallery() async {
-    setState(() {
-      _imageFile = null;
-      _objectInfo = null;
-      _errorMessage = null;
-      _savedImagePath = null;
-    });
-
-    try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 80,
-        maxWidth: 800,
-      );
-
-      if (image != null) {
-        setState(() {
-          _imageFile = image;
-          _isProcessing = true;
-        });
-
-        // Salvar a imagem no dispositivo
-        final savedImagePath = await _saveImageToDevice(image);
-        if (savedImagePath != null) {
-          _savedImagePath = savedImagePath;
-        }
-
-        // Analisar objeto
-        final objectInfo = await _geminiService.analyzeObject(image);
-
-        if (objectInfo != null) {
-          setState(() {
-            _objectInfo = objectInfo;
-            _nameController.text = objectInfo['name'] ?? '';
-            _descriptionController.text = objectInfo['description'] ?? '';
-            _selectedCategory = objectInfo['category'] ?? 'Diversos';
-            _isProcessing = false;
-          });
-        } else {
-          setState(() {
-            _errorMessage = 'Não foi possível analisar o objeto na imagem';
-            _isProcessing = false;
-          });
-        }
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Erro ao selecionar ou processar a imagem: $e';
-        _isProcessing = false;
-      });
-    }
-  }
-
-  Future<String?> _saveImageToDevice(XFile image) async {
-    try {
-      // Verificar permissões
-      if (!kIsWeb) {
-        final status = await Permission.storage.request();
-        if (!status.isGranted) {
-          throw Exception('Permissão para armazenamento negada');
-        }
-      }
-
-      // Ler os bytes da imagem
-      final bytes = await image.readAsBytes();
+      final File imageFile = File(widget.imagePath);
       
-      // Gerar nome de arquivo único baseado na data/hora
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = 'magicbox_object_$timestamp.jpg';
+      if (!await imageFile.exists()) {
+        throw Exception('Arquivo de imagem não encontrado');
+      }
       
-      if (kIsWeb) {
-        // No ambiente web, não podemos salvar arquivos diretamente
-        return fileName; // Apenas retorna o nome do arquivo para referência
+      // Processar a imagem com o Gemini
+      final result = await _geminiService.recognizeObject(imageFile.path);
+      
+      if (result != null) {
+        setState(() {
+          _objectInfo = result;
+          _nameController.text = result['name'] ?? '';
+          _descriptionController.text = result['description'] ?? '';
+          _isProcessing = false;
+        });
       } else {
-        // Em dispositivos móveis, salvar em diretório temporário
-        final directory = await getApplicationDocumentsDirectory();
-        final filePath = '${directory.path}/$fileName';
-        final file = File(filePath);
-        await file.writeAsBytes(bytes);
-        
-        // Mostrar mensagem de sucesso
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Imagem salva nos documentos do app'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 1),
-            ),
-          );
-        }
-        
-        return filePath;
+        throw Exception('Não foi possível reconhecer o objeto');
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao salvar imagem: $e'),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+      setState(() {
+        _isProcessing = false;
+        _errorMessage = 'Erro ao processar imagem: $e';
+      });
     }
-    return null;
   }
 
-  Future<void> _saveObject() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_selectedBoxId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Por favor, selecione uma caixa')),
-      );
+  Future<void> _saveItem() async {
+    if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    final now = DateTime.now().toIso8601String();
-
-    final newItem = Item(
-      name: _nameController.text,
-      category: _selectedCategory,
-      description: _descriptionController.text.isEmpty ? null : _descriptionController.text,
-      image: _savedImagePath, // Incluir o caminho da imagem salva
-      boxId: _selectedBoxId!,
-      createdAt: now,
-    );
+    setState(() {
+      _isProcessing = true;
+    });
 
     try {
+      // Salvar a imagem localmente
+      final String savedImagePath = await _saveImageLocally(widget.imagePath);
+      
+      // Criar o novo item
+      final newItem = Item(
+        name: _nameController.text.trim(),
+        description: _descriptionController.text.trim(),
+        category: _selectedCategory ?? _currentBox?.category ?? 'Diversos',
+        boxId: widget.boxId,
+        quantity: 1,
+        image: savedImagePath,
+        createdAt: DateTime.now().toIso8601String(),
+      );
+
+      // Salvar no banco de dados
       final savedItem = await _databaseHelper.createItem(newItem);
+      
+      // Chamar o callback se fornecido
+      if (widget.onItemAdded != null) {
+        widget.onItemAdded!();
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_savedImagePath != null 
-              ? 'Objeto e imagem salvos com sucesso!' 
-              : 'Objeto salvo com sucesso!'),
-            backgroundColor: Colors.green,
-          ),
+          const SnackBar(content: Text('Objeto adicionado com sucesso!')),
         );
-        Navigator.pop(context, savedItem);
+        Navigator.pop(context);
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro ao salvar objeto: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+      setState(() {
+        _isProcessing = false;
+        _errorMessage = 'Erro ao salvar item: $e';
+      });
+    }
+  }
+
+  Future<String> _saveImageLocally(String imagePath) async {
+    try {
+      final File sourceFile = File(imagePath);
+      final Directory appDir = await getApplicationDocumentsDirectory();
+      final String fileName = 'item_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final String targetPath = '${appDir.path}/images/$fileName';
+      
+      // Garantir que o diretório existe
+      final Directory imageDir = Directory('${appDir.path}/images');
+      if (!await imageDir.exists()) {
+        await imageDir.create(recursive: true);
       }
+      
+      // Copiar o arquivo
+      final File targetFile = await sourceFile.copy(targetPath);
+      return targetFile.path;
+    } catch (e) {
+      print('Erro ao salvar imagem: $e');
+      return imagePath; // Retornar o caminho original em caso de erro
     }
   }
 
@@ -257,214 +161,156 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Reconhecimento de Objeto'),
+        title: const Text('Identificação de Objeto'),
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
       ),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Text(
-                'Tire uma foto do objeto para identificá-lo automaticamente',
-                style: TextStyle(fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              
-              // Imagem capturada
-              if (_imageFile != null)
-                AspectRatio(
-                  aspectRatio: 16 / 9, // Proporção widescreen
-                  child: Container(
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: kIsWeb
-                          ? Image.network(_imageFile!.path, fit: BoxFit.contain)
-                          : Image.file(File(_imageFile!.path), fit: BoxFit.contain),
-                    ),
-                  ),
-                ),
-              
-              const SizedBox(height: 24),
-              
-              // Botões para capturar imagem
-              Row(
+      body: _isProcessing
+          ? const Center(
+              child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  ElevatedButton.icon(
-                    onPressed: _isProcessing ? null : _takePhoto,
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Câmera'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  ElevatedButton.icon(
-                    onPressed: _isProcessing ? null : _pickImageFromGallery,
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('Galeria'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                    ),
-                  ),
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Analisando imagem com IA...'),
                 ],
               ),
-              
-              const SizedBox(height: 24),
-              
-              // Indicador de processamento
-              if (_isProcessing)
-                Column(
-                  children: const [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 16),
-                    Text('Analisando objeto...'),
-                  ],
-                ),
-              
-              // Formulário para editar e salvar o objeto
-              if (_objectInfo != null && !_isProcessing)
-                Form(
-                  key: _formKey,
+            )
+          : _errorMessage != null
+              ? Center(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Text(
-                        'Informações do Objeto',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      const Icon(Icons.error_outline, size: 48, color: Colors.red),
                       const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _nameController,
-                        decoration: const InputDecoration(
-                          labelText: 'Nome do objeto',
-                          border: OutlineInputBorder(),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return 'Por favor, insira um nome para o objeto';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _descriptionController,
-                        decoration: const InputDecoration(
-                          labelText: 'Descrição',
-                          border: OutlineInputBorder(),
-                        ),
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 16),
-                      DropdownButtonFormField<String>(
-                        value: _selectedCategory,
-                        decoration: const InputDecoration(
-                          labelText: 'Categoria',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: [
-                          'Eletrônicos',
-                          'Ferramentas manuais',
-                          'Ferramentas elétricas',
-                          'Equipamentos de áudio',
-                          'Informática',
-                          'Itens de escritório',
-                          'Diversos',
-                        ].map((category) {
-                          return DropdownMenuItem<String>(
-                            value: category,
-                            child: Text(category),
-                          );
-                        }).toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedCategory = value;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      DropdownButtonFormField<int>(
-                        value: _selectedBoxId,
-                        decoration: const InputDecoration(
-                          labelText: 'Caixa',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: widget.boxes.map((box) {
-                          return DropdownMenuItem<int>(
-                            value: box.id,
-                            child: Text('${box.name} (ID: ${box.formattedId})'),
-                          );
-                        }).toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedBoxId = value;
-                          });
-                        },
-                        validator: (value) {
-                          if (value == null) {
-                            return 'Por favor, selecione uma caixa';
-                          }
-                          return null;
-                        },
-                      ),
+                      Text(_errorMessage!, textAlign: TextAlign.center),
                       const SizedBox(height: 24),
-                      Center(
-                        child: ElevatedButton(
-                          onPressed: _saveObject,
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 32,
-                              vertical: 12,
-                            ),
-                          ),
-                          child: const Text('Salvar Objeto'),
-                        ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Voltar'),
                       ),
                     ],
                   ),
-                ),
-              
-              // Mensagem de erro
-              if (_errorMessage != null && !_isProcessing)
-                Padding(
-                  padding: const EdgeInsets.only(top: 16),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(
-                      color: Colors.red,
-                      fontSize: 16,
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Imagem capturada
+                        Center(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(widget.imagePath),
+                              height: 200,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        
+                        // Informações do objeto
+                        const Text(
+                          'Objeto Identificado',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Nome
+                        TextFormField(
+                          controller: _nameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Nome do objeto *',
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Nome é obrigatório';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Categoria
+                        DropdownButtonFormField<String>(
+                          value: _selectedCategory,
+                          decoration: const InputDecoration(
+                            labelText: 'Categoria',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: [
+                            if (_currentBox?.category != null)
+                              DropdownMenuItem(
+                                value: _currentBox!.category,
+                                child: Text(_currentBox!.category!),
+                              ),
+                            const DropdownMenuItem(
+                              value: 'Diversos',
+                              child: Text('Diversos'),
+                            ),
+                            const DropdownMenuItem(
+                              value: 'Eletrônicos',
+                              child: Text('Eletrônicos'),
+                            ),
+                            const DropdownMenuItem(
+                              value: 'Documentos',
+                              child: Text('Documentos'),
+                            ),
+                            const DropdownMenuItem(
+                              value: 'Roupas',
+                              child: Text('Roupas'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedCategory = value;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // Descrição
+                        TextFormField(
+                          controller: _descriptionController,
+                          decoration: const InputDecoration(
+                            labelText: 'Descrição',
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 24),
+                        
+                        // Botões
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Cancelar'),
+                            ),
+                            const SizedBox(width: 16),
+                            ElevatedButton(
+                              onPressed: _saveItem,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Theme.of(context).colorScheme.primary,
+                                foregroundColor: Colors.white,
+                              ),
+                              child: const Text('Salvar'),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                    textAlign: TextAlign.center,
                   ),
                 ),
-            ],
-          ),
-        ),
-      ),
     );
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
   }
 }

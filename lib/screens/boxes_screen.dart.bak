@@ -212,16 +212,6 @@ class BoxesScreenState extends State<BoxesScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : _filteredBoxes.isEmpty
                     ? const Center(child: Text('Nenhuma caixa encontrada'))
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _filteredBoxes.length,
-                        itemBuilder: (context, index) {
-                          return _buildBoxCard(_filteredBoxes[index]);
-                        },
-                      ),
-          ),
-        ],
-      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _navigateToBoxIdRecognition,
         child: const Icon(Icons.add),

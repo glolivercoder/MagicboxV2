@@ -1,18 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:magicboxv2/screens/main_screen.dart';
 import 'package:magicboxv2/utils/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// Variável global para controlar se estamos usando fallback em memória
+bool useInMemoryDatabase = false;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Inicializar o sqflite_ffi para web e desktop
+  // Inicializar o sqflite para diferentes plataformas
   if (kIsWeb) {
-    // Inicialização específica para web
+    try {
+      // Definir o caminho para os arquivos SQLite no ambiente web
+      print('Inicializando SQLite para web...');
+      
+      // Inicialização específica para web usando sqflite_common_ffi_web
+      databaseFactory = databaseFactoryFfiWeb;
+      
+      // Testar se o SQLite está funcionando corretamente
+      final db = await openDatabase('test.db');
+      await db.execute('CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY)');
+      await db.close();
+      
+      print('SQLite para web inicializado com sucesso!');
+    } catch (e) {
+      // Se falhar, usar dados em memória como fallback
+      print('ERRO ao inicializar SQLite para web: $e');
+      print('Usando fallback em memória para o banco de dados');
+      useInMemoryDatabase = true;
+    }
+  } else {
+    // Inicialização para desktop e mobile
     sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
   }
   
   final prefs = await SharedPreferences.getInstance();

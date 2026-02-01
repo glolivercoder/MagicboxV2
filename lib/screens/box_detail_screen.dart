@@ -4,6 +4,8 @@ import 'package:magicboxv2/models/box.dart';
 import 'package:magicboxv2/models/item.dart';
 import 'package:magicboxv2/screens/object_recognition_screen.dart';
 import 'package:magicboxv2/services/database_helper.dart';
+import 'package:magicboxv2/services/gemini_service.dart';
+import 'package:image_picker/image_picker.dart';
 
 class BoxDetailScreen extends StatefulWidget {
   final Box box;
@@ -16,6 +18,8 @@ class BoxDetailScreen extends StatefulWidget {
 
 class _BoxDetailScreenState extends State<BoxDetailScreen> {
   final DatabaseHelper _databaseHelper = DatabaseHelper.instance;
+  final ImagePicker _imagePicker = ImagePicker();
+  
   List<Item> _items = [];
   bool _isLoading = true;
 
@@ -31,7 +35,11 @@ class _BoxDetailScreenState extends State<BoxDetailScreen> {
     });
 
     try {
-      final items = await _databaseHelper.getItemsByBoxId(widget.box.id!);
+      if (widget.box.id == null) {
+        throw Exception('ID da caixa não pode ser nulo');
+      }
+      
+      final items = await _databaseHelper.readItemsByBoxId(widget.box.id!);
       setState(() {
         _items = items;
         _isLoading = false;
@@ -39,6 +47,7 @@ class _BoxDetailScreenState extends State<BoxDetailScreen> {
     } catch (e) {
       setState(() {
         _isLoading = false;
+        _items = []; // Garantir que a lista está vazia em caso de erro
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -48,305 +57,483 @@ class _BoxDetailScreenState extends State<BoxDetailScreen> {
     }
   }
 
-  void _navigateToObjectRecognition() async {
-    final boxes = await _databaseHelper.readAllBoxes();
-    if (mounted) {
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ObjectRecognitionScreen(boxes: boxes),
-        ),
-      );
-      if (result != null) {
-        _loadItems();
+  Future<void> _showAddItemDialog() async {
+    final TextEditingController nameController = TextEditingController();
+    final TextEditingController descriptionController = TextEditingController();
+    String? selectedCategory;
+    List<String> categories = ['Diversos', 'Eletrônicos', 'Documentos', 'Roupas', 'Livros'];
+    
+    // Carregar categorias do banco de dados
+    try {
+      final boxes = await _databaseHelper.readAllBoxes();
+      final dbCategories = boxes
+          .map((box) => box.category)
+          .where((category) => category.isNotEmpty)
+          .toSet()
+          .toList();
+      
+      if (dbCategories.isNotEmpty) {
+        categories = dbCategories;
       }
+    } catch (e) {
+      // Usar categorias padrão em caso de erro
     }
+
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Novo Objeto',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.camera_alt, color: Colors.white),
+                              onPressed: () {
+                                // Tirar foto
+                                Navigator.pop(dialogContext);
+                                _navigateToObjectRecognition();
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.photo_library, color: Colors.white),
+                              onPressed: () {
+                                // Selecionar da galeria
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Nome do objeto',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    TextField(
+                      controller: nameController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white30),
+                        ),
+                        focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.blue),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Categoria (opcional)',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    DropdownButtonFormField<String>(
+                      value: selectedCategory,
+                      dropdownColor: const Color(0xFF2E2E2E),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        hintText: 'Selecione uma categoria',
+                        hintStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white30),
+                        ),
+                        focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.blue),
+                        ),
+                      ),
+                      items: categories.map((String category) {
+                        return DropdownMenuItem<String>(
+                          value: category,
+                          child: Text(category),
+                        );
+                      }).toList(),
+                      onChanged: (String? newValue) {
+                        setDialogState(() {
+                          selectedCategory = newValue;
+                        });
+                      },
+                    ),
+                    InkWell(
+                      onTap: () {
+                        // Adicionar nova categoria
+                        _showAddCategoryDialog(context, (newCategory) {
+                          if (newCategory.isNotEmpty && !categories.contains(newCategory)) {
+                            setDialogState(() {
+                              categories.add(newCategory);
+                              selectedCategory = newCategory;
+                            });
+                          }
+                        });
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8.0),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            Icon(Icons.add, color: Colors.blue, size: 16),
+                            SizedBox(width: 4),
+                            Text('Nova categoria', style: TextStyle(color: Colors.blue)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Caixa',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: Colors.white30),
+                        ),
+                      ),
+                      child: Text(
+                        '${widget.box.name} (ID: ${widget.box.id})',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Descrição (opcional)',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    TextField(
+                      controller: descriptionController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white30),
+                        ),
+                        focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.blue),
+                        ),
+                      ),
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          child: const Text('Cancelar', style: TextStyle(color: Colors.blue)),
+                          onPressed: () {
+                            Navigator.of(dialogContext).pop();
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          ),
+                          child: const Text('Salvar'),
+                          onPressed: () async {
+                            // Validar campos
+                            if (nameController.text.trim().isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Nome do objeto é obrigatório')),
+                              );
+                              return;
+                            }
+
+                            // Criar novo item
+                            final newItem = Item(
+                              name: nameController.text.trim(),
+                              description: descriptionController.text.trim(),
+                              category: selectedCategory ?? widget.box.category ?? 'Diversos',
+                              boxId: widget.box.id!,
+                              quantity: 1, // Padrão é 1
+                              createdAt: DateTime.now().toIso8601String(),
+                            );
+
+                            try {
+                              // Salvar no banco de dados
+                              await _databaseHelper.createItem(newItem);
+                              
+                              // Fechar o diálogo
+                              Navigator.of(dialogContext).pop();
+                              
+                              // Recarregar a lista de itens
+                              await _loadItems();
+                              
+                              // Mostrar mensagem de sucesso
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Objeto adicionado com sucesso!')),
+                                );
+                              }
+                            } catch (e) {
+                              // Mostrar erro
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Erro ao adicionar objeto: $e')),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+  
+  // Método para adicionar nova categoria
+  Future<void> _showAddCategoryDialog(BuildContext context, Function(String) onCategoryAdded) async {
+    final TextEditingController categoryController = TextEditingController();
+    
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF2E2E2E),
+          title: const Text('Nova Categoria', style: TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: categoryController,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: 'Nome da categoria',
+              hintStyle: TextStyle(color: Colors.white70),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white30),
+              ),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.blue),
+              ),
+            ),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancelar', style: TextStyle(color: Colors.blue)),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Adicionar', style: TextStyle(color: Colors.blue)),
+              onPressed: () {
+                final newCategory = categoryController.text.trim();
+                if (newCategory.isNotEmpty) {
+                  onCategoryAdded(newCategory);
+                }
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+  Future<void> _navigateToObjectRecognition() async {
+    final XFile? image = await _imagePicker.pickImage(source: ImageSource.camera);
+    if (image == null) return;
+
+    if (!mounted) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ObjectRecognitionScreen(
+          imagePath: image.path,
+          boxId: widget.box.id!,
+          onItemAdded: () {
+            _loadItems(); // Recarregar itens quando um novo for adicionado
+          },
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('#${widget.box.formattedId} - ${widget.box.name}'),
+        title: Text('Objetos (${_items.length})'),
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.grid_view),
+            onPressed: () {
+              // Alternar entre visualização em lista e grade
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.edit),
             onPressed: () {
-              // Implementar edição de caixa
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.qr_code),
-            onPressed: () {
-              // Implementar visualização de QR code
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.print),
-            onPressed: () {
-              // Implementar impressão de etiqueta
+              // Editar caixa
             },
           ),
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Informações da caixa
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      widget.box.name,
-                                      style: const TextStyle(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Categoria: ${widget.box.category}',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        color: Theme.of(context).colorScheme.secondary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  '#${widget.box.formattedId}',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Theme.of(context).colorScheme.primary,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (widget.box.description != null && widget.box.description!.isNotEmpty) ...[
-                            const SizedBox(height: 16),
-                            const Text(
-                              'Descrição:',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              widget.box.description!,
-                              style: const TextStyle(fontSize: 16),
-                            ),
-                          ],
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              const Icon(Icons.calendar_today, size: 16),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Criado em: ${_formatDate(widget.box.createdAt)}',
-                                style: const TextStyle(fontSize: 14),
-                              ),
-                            ],
-                          ),
-                          if (widget.box.updatedAt != null) ...[
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                const Icon(Icons.update, size: 16),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Atualizado em: ${_formatDate(widget.box.updatedAt!)}',
-                                  style: const TextStyle(fontSize: 14),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                // Lista de itens
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Itens (${_items.length})',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      TextButton.icon(
-                        icon: const Icon(Icons.camera_alt),
-                        label: const Text('Adicionar com IA'),
-                        onPressed: _navigateToObjectRecognition,
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: _items.isEmpty
-                      ? const Center(
-                          child: Text('Nenhum item encontrado nesta caixa'),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(16.0),
-                          itemCount: _items.length,
-                          itemBuilder: (context, index) {
-                            final item = _items[index];
-                            return _buildItemCard(item);
-                          },
-                        ),
-                ),
-              ],
-            ),
+          : _buildContent(),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          // Implementar adição manual de item
+          // Abrir menu de adição de item
+          _showAddOptions();
         },
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
         child: const Icon(Icons.add),
       ),
     );
   }
 
-  Widget _buildItemCard(Item item) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16.0),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Imagem do item
-            if (item.image != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.file(
-                  File(item.image!),
-                  width: 80,
-                  height: 80,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    width: 80,
-                    height: 80,
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                    child: const Icon(Icons.image_not_supported),
-                  ),
-                ),
-              )
-            else
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.image),
-              ),
-            const SizedBox(width: 16),
-            
-            // Informações do item
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  if (item.category != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      item.category!,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Theme.of(context).colorScheme.secondary,
-                      ),
-                    ),
-                  ],
-                  if (item.description != null && item.description!.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      item.description!,
-                      style: const TextStyle(fontSize: 14),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ],
-              ),
+  Widget _buildContent() {
+    if (_items.isEmpty) {
+      return _buildEmptyState();
+    } else {
+      return ListView.builder(
+        itemCount: _items.length,
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          return _buildItemCard(item);
+        },
+      );
+    }
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.inventory_2_outlined,
+            size: 80,
+            color: Colors.grey,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Nenhum objeto nesta caixa',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
             ),
-            
-            // Menu de opções
-            PopupMenuButton<String>(
-              onSelected: (value) {
-                if (value == 'edit') {
-                  // Implementar edição de item
-                } else if (value == 'delete') {
-                  // Implementar exclusão de item
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'edit',
-                  child: Row(
-                    children: [
-                      Icon(Icons.edit),
-                      SizedBox(width: 8),
-                      Text('Editar'),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete),
-                      SizedBox(width: 8),
-                      Text('Excluir'),
-                    ],
-                  ),
-                ),
-              ],
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.camera_alt),
+            label: const Text('Identificar com câmera'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
-          ],
-        ),
+            onPressed: _navigateToObjectRecognition,
+          ),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            icon: const Icon(Icons.add),
+            label: const Text('Adicionar manualmente'),
+            onPressed: _showAddItemDialog,
+          ),
+        ],
       ),
     );
   }
 
-  String _formatDate(String isoString) {
-    final date = DateTime.parse(isoString);
-    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  void _showAddOptions() {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Colors.green),
+                title: const Text('Identificar com câmera'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _navigateToObjectRecognition();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.edit, color: Colors.blue),
+                title: const Text('Adicionar manualmente'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddItemDialog();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildItemCard(Item item) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: Theme.of(context).colorScheme.primary.withAlpha(25),
+          child: item.image != null
+              ? ClipOval(
+                  child: Image.file(
+                    File(item.image!),
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.cover,
+                  ),
+                )
+              : Icon(
+                  Icons.inventory,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+        ),
+        title: Text(
+          item.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: item.description != null && item.description!.isNotEmpty
+            ? Text(item.description!)
+            : null,
+        trailing: Text(
+          'Qtd: ${item.quantity}',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Theme.of(context).colorScheme.secondary,
+          ),
+        ),
+        onTap: () {
+          // Mostrar detalhes do item
+        },
+      ),
+    );
   }
 }

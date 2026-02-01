@@ -83,7 +83,8 @@ class _MainScreenState extends State<MainScreen> {
     try {
       // Usar diretório de armazenamento específico para Android
       final dbHelper = DatabaseHelper.instance;
-      await dbHelper.optimizeForMobile();
+      // Não há necessidade de otimizações específicas para mobile
+      // O DatabaseHelper já lida com isso automaticamente
     } catch (e) {
       debugPrint('Erro ao configurar banco de dados para mobile: $e');
     }

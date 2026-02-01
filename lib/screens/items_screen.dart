@@ -4,6 +4,7 @@ import 'package:magicboxv2/models/box.dart';
 import 'package:magicboxv2/models/item.dart';
 import 'package:magicboxv2/screens/object_recognition_screen.dart';
 import 'package:magicboxv2/services/database_helper.dart';
+import 'package:image_picker/image_picker.dart';
 
 class ItemsScreen extends StatefulWidget {
   const ItemsScreen({super.key});
@@ -110,24 +111,73 @@ class ItemsScreenState extends State<ItemsScreen> {
   void _navigateToObjectRecognition() async {
     if (_boxes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('É necessário criar uma caixa antes de adicionar itens'),
-          backgroundColor: Colors.orange,
-        ),
+        const SnackBar(content: Text('Nenhuma caixa disponível. Crie uma caixa primeiro.')),
       );
       return;
     }
     
-    final result = await Navigator.push(
+    // Selecionar a caixa para adicionar o item
+    Box? selectedBox;
+    
+    if (_boxes.length == 1) {
+      // Se só tem uma caixa, usar ela
+      selectedBox = _boxes.first;
+    } else {
+      // Mostrar diálogo para selecionar a caixa
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: const Text('Selecionar Caixa'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _boxes.length,
+                itemBuilder: (context, index) {
+                  final box = _boxes[index];
+                  return ListTile(
+                    title: Text(box.name),
+                    subtitle: Text('ID: ${box.id}'),
+                    onTap: () {
+                      selectedBox = box;
+                      Navigator.pop(context);
+                    },
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                child: const Text('Cancelar'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          );
+        },
+      );
+    }
+    
+    if (selectedBox == null) return;
+    
+    // Tirar a foto
+    final imagePicker = ImagePicker();
+    final XFile? image = await imagePicker.pickImage(source: ImageSource.camera);
+    if (image == null) return;
+    
+    if (!mounted) return;
+    
+    // Navegar para a tela de reconhecimento
+    await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ObjectRecognitionScreen(boxes: _boxes),
+        builder: (context) => ObjectRecognitionScreen(
+          imagePath: image.path,
+          boxId: selectedBox!.id!,
+          onItemAdded: () => _loadData(),
+        ),
       ),
     );
-    
-    if (result != null) {
-      _loadData();
-    }
   }
 
   @override

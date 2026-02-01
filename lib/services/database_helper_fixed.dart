@@ -10,9 +10,6 @@ import 'package:magicboxv2/models/item.dart';
 import 'package:magicboxv2/models/user.dart';
 import 'package:magicboxv2/services/log_service.dart';
 
-// Importar a variável global do main.dart
-import 'package:magicboxv2/main.dart' show useInMemoryDatabase;
-
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
@@ -26,26 +23,7 @@ class DatabaseHelper {
   // Flag para controlar a inicialização de dados
   static bool _initialDataChecked = false;
   
-  // Lista em memória para fallback quando o SQLite falhar no ambiente web
-  List<Box> _inMemoryBoxes = [];
-  List<Item> _inMemoryItems = [];
-  List<User> _inMemoryUsers = [];
-  bool _usingInMemoryFallback = false;
-  
   Future<Database> get database async {
-    // Se estamos usando o banco de dados em memória (fallback), lançar exceção
-    if (useInMemoryDatabase || _usingInMemoryFallback) {
-      _logService.info('Usando banco de dados em memória', category: 'database');
-      _usingInMemoryFallback = true;
-      
-      // Carregar dados iniciais em memória se ainda não foram carregados
-      if (_inMemoryBoxes.isEmpty) {
-        await _loadInitialDataInMemory();
-      }
-      
-      throw Exception('Usando banco de dados em memória');
-    }
-    
     // Retornar o banco existente se já estiver inicializado
     if (_database != null) return _database!;
     
@@ -82,26 +60,11 @@ class DatabaseHelper {
         path = join(dbPath, 'magicbox.db');
       }
       
-      try {
-        _database = await openDatabase(
-          path,
-          version: 1,
-          onCreate: _createDB,
-        );
-      } catch (e) {
-        // Se falhar, usar dados em memória como fallback
-        _logService.warning('Erro ao inicializar banco de dados: $e. Usando dados em memória como fallback.', category: 'database');
-        _usingInMemoryFallback = true;
-        
-        // Criar um banco de dados em memória (não persistente)
-        _databaseInitializing = false;
-        
-        // Carregar dados iniciais em memória
-        await _loadInitialDataInMemory();
-        
-        // Retornar null para indicar que estamos usando fallback
-        throw Exception('Usando fallback em memória');
-      }
+      _database = await openDatabase(
+        path,
+        version: 1,
+        onCreate: _createDB,
+      );
       
       // Verificar se há dados iniciais e inserir se necessário
       await _ensureInitialData();
@@ -195,194 +158,69 @@ class DatabaseHelper {
     _logService.info('Tabelas criadas com sucesso', category: 'database');
   }
 
-  Future<void> _loadInitialDataInMemory() async {
-    _logService.info('Carregando dados iniciais em memória para ambiente web', category: 'database');
-    
-    // Criar caixas de exemplo em memória
-    final box1 = Box(
-      id: 1,
-      name: 'Caixa de Ferramentas',
-      category: 'Ferramentas',
-      description: 'Contém ferramentas básicas para manutenção doméstica',
-      createdAt: DateTime.now().toIso8601String(),
-      updatedAt: DateTime.now().toIso8601String(),
-    );
-    
-    final box2 = Box(
-      id: 2,
-      name: 'Documentos Importantes',
-      category: 'Documentos',
-      description: 'Contém documentos pessoais importantes',
-      createdAt: DateTime.now().toIso8601String(),
-      updatedAt: DateTime.now().toIso8601String(),
-    );
-    
-    // Adicionar caixas à lista em memória
-    _inMemoryBoxes.add(box1);
-    _inMemoryBoxes.add(box2);
-    
-    // Criar itens de exemplo para a primeira caixa
-    final item1 = Item(
-      id: 1,
-      name: 'Martelo',
-      category: 'Ferramentas',
-      description: 'Martelo de carpinteiro',
-      boxId: 1,
-      createdAt: DateTime.now().toIso8601String(),
-      updatedAt: DateTime.now().toIso8601String(),
-    );
-    
-    final item2 = Item(
-      id: 2,
-      name: 'Chave de fenda',
-      category: 'Ferramentas',
-      description: 'Chave de fenda Phillips',
-      boxId: 1,
-      createdAt: DateTime.now().toIso8601String(),
-      updatedAt: DateTime.now().toIso8601String(),
-    );
-    
-    // Adicionar itens à lista em memória
-    _inMemoryItems.add(item1);
-    _inMemoryItems.add(item2);
-    
-    _logService.info('Dados iniciais carregados em memória: ${_inMemoryBoxes.length} caixas, ${_inMemoryItems.length} itens', category: 'database');
-  }
-
   Future<void> _ensureInitialData() async {
     if (_initialDataChecked) return;
     
     try {
-      // Verificar se já existem caixas no banco
       final db = await database;
-      final boxCount = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM boxes'));
       
-      if (boxCount == 0) {
-        _logService.info('Inserindo dados iniciais no banco', category: 'database');
+      // Verificar se já existem usuários
+      final userCount = Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM users')
+      );
+      
+      // Se não houver usuários, criar um usuário admin padrão
+      if (userCount == 0) {
+        _logService.info('Criando usuário admin padrão', category: 'database');
         
-        // Inserir caixas de exemplo
-        await createBox(Box(
-          name: 'Caixa de Ferramentas',
-          category: 'Ferramentas',
-          description: 'Contém ferramentas básicas para manutenção doméstica',
-          createdAt: DateTime.now().toIso8601String(),
-          updatedAt: DateTime.now().toIso8601String(),
-        ));
-        
-        await createBox(Box(
-          name: 'Documentos Importantes',
-          category: 'Documentos',
-          description: 'Contém documentos pessoais importantes',
-          createdAt: DateTime.now().toIso8601String(),
-          updatedAt: DateTime.now().toIso8601String(),
-        ));
+        await db.insert('users', {
+          'name': 'Admin',
+          'email': 'admin@magicbox.com',
+          'is_admin': 1,
+          'created_at': DateTime.now().toIso8601String(),
+        });
       }
       
       _initialDataChecked = true;
-    } catch (e) {
-      _logService.error('Erro ao verificar/inserir dados iniciais: $e', category: 'database');
+    } catch (e, stackTrace) {
+      _logService.error(
+        'Erro ao verificar/inserir dados iniciais',
+        error: e,
+        stackTrace: stackTrace,
+        category: 'database',
+      );
     }
   }
 
   // CRUD para caixas
   Future<Box> createBox(Box box) async {
-    try {
-      if (_usingInMemoryFallback) {
-        _logService.info('Criando caixa em memória', category: 'database');
-        // Gerar um ID único para a caixa em memória
-        final id = _inMemoryBoxes.isEmpty ? 1 : _inMemoryBoxes.map((b) => b.id ?? 0).reduce((a, b) => a > b ? a : b) + 1;
-        final newBox = box.copyWith(id: id);
-        _inMemoryBoxes.add(newBox);
-        return newBox;
-      }
-      
-      final db = await database;
-      final id = await db.insert('boxes', box.toMap());
-      _logService.info('Caixa criada com ID: $id', category: 'database');
-      return box.copyWith(id: id);
-    } catch (e) {
-      _logService.error('Erro ao criar caixa: $e', category: 'database');
-      if (kIsWeb) {
-        // Fallback para dados em memória no ambiente web
-        _logService.info('Usando fallback em memória para criar caixa', category: 'database');
-        _usingInMemoryFallback = true;
-        
-        // Gerar um ID único para a caixa em memória
-        final id = _inMemoryBoxes.isEmpty ? 1 : _inMemoryBoxes.map((b) => b.id ?? 0).reduce((a, b) => a > b ? a : b) + 1;
-        final newBox = box.copyWith(id: id);
-        _inMemoryBoxes.add(newBox);
-        return newBox;
-      }
-      rethrow;
-    }
+    final db = await database;
+    final id = await db.insert('boxes', box.toMap());
+    _logService.info('Caixa criada com ID: $id', category: 'database');
+    return box.copyWith(id: id);
   }
 
   Future<Box?> readBox(int id) async {
-    try {
-      if (_usingInMemoryFallback) {
-        _logService.info('Lendo caixa $id da memória', category: 'database');
-        final box = _inMemoryBoxes.firstWhere(
-          (box) => box.id == id,
-          orElse: () => throw Exception('Caixa não encontrada'),
-        );
-        return box;
-      }
-      
-      final db = await database;
-      final maps = await db.query(
-        'boxes',
-        columns: ['id', 'name', 'category', 'description', 'image', 'created_at', 'updated_at', 'barcode_data_url'],
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+    final db = await database;
+    final maps = await db.query(
+      'boxes',
+      columns: ['id', 'name', 'category', 'description', 'image', 'created_at', 'updated_at', 'barcode_data_url'],
+      where: 'id = ?',
+      whereArgs: [id],
+    );
 
-      if (maps.isNotEmpty) {
-        return Box.fromMap(maps.first);
-      } else {
-        _logService.warning('Caixa com ID $id não encontrada', category: 'database');
-        return null;
-      }
-    } catch (e) {
-      _logService.error('Erro ao ler caixa: $e', category: 'database');
-      if (kIsWeb) {
-        // Fallback para dados em memória no ambiente web
-        _logService.info('Usando fallback em memória para ler caixa', category: 'database');
-        _usingInMemoryFallback = true;
-        
-        try {
-          final box = _inMemoryBoxes.firstWhere(
-            (box) => box.id == id,
-            orElse: () => throw Exception('Caixa não encontrada'),
-          );
-          return box;
-        } catch (e) {
-          _logService.warning('Caixa com ID $id não encontrada em memória', category: 'database');
-          return null;
-        }
-      }
+    if (maps.isNotEmpty) {
+      return Box.fromMap(maps.first);
+    } else {
+      _logService.warning('Caixa com ID $id não encontrada', category: 'database');
       return null;
     }
   }
 
   Future<List<Box>> readAllBoxes() async {
-    try {
-      if (_usingInMemoryFallback) {
-        _logService.info('Lendo todas as caixas da memória', category: 'database');
-        return _inMemoryBoxes;
-      }
-      
-      final db = await database;
-      final result = await db.query('boxes');
-      return result.map((map) => Box.fromMap(map)).toList();
-    } catch (e) {
-      _logService.error('Erro ao ler caixas: $e', category: 'database');
-      if (kIsWeb) {
-        // Fallback para dados em memória no ambiente web
-        _logService.info('Usando fallback em memória para ler caixas', category: 'database');
-        return _inMemoryBoxes;
-      }
-      rethrow;
-    }
+    final db = await database;
+    final result = await db.query('boxes');
+    return result.map((map) => Box.fromMap(map)).toList();
   }
 
   Future<List<Box>> searchBoxes(String query) async {
@@ -464,32 +302,14 @@ class DatabaseHelper {
   }
 
   Future<List<Item>> readItemsByBoxId(int boxId) async {
-    try {
-      if (_usingInMemoryFallback) {
-        _logService.info('Lendo itens da caixa $boxId da memória', category: 'database');
-        return _inMemoryItems.where((item) => item.boxId == boxId).toList();
-      }
-      
-      final db = await database;
-      final result = await db.query(
-        'items',
-        where: 'box_id = ?',
-        whereArgs: [boxId],
-      );
-      return result.map((map) => Item.fromMap(map)).toList();
-    } catch (e) {
-      _logService.error('Erro ao ler itens da caixa: $e', category: 'database');
-      if (kIsWeb) {
-        // Fallback para dados em memória no ambiente web
-        _logService.info('Usando fallback em memória para ler itens da caixa', category: 'database');
-        _usingInMemoryFallback = true;
-        return _inMemoryItems.where((item) => item.boxId == boxId).toList();
-      }
-      return [];
-    }
+    final db = await database;
+    final result = await db.query(
+      'items',
+      where: 'box_id = ?',
+      whereArgs: [boxId],
+    );
+    return result.map((map) => Item.fromMap(map)).toList();
   }
-
-  Future<List<Item>> getItemsByBoxId(int boxId) => readItemsByBoxId(boxId);
 
   Future<List<Item>> searchItems(String query) async {
     final db = await database;

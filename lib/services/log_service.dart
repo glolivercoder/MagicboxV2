@@ -12,7 +12,7 @@ class LogService {
   static const String _logEnabledKey = 'log_enabled';
   static const String _logLevelKey = 'log_level';
   static const int _maxLogSize = 5 * 1024 * 1024; // 5MB
-  static const String _logDirectory = 'logs';
+  static const String _logDirectory = 'LogsMagicboxV2';
   
   bool _isLogEnabled = true;
   LogLevel _logLevel = LogLevel.info;
@@ -41,8 +41,19 @@ class LogService {
 
       // Inicializar arquivo de log
       if (_isLogEnabled) {
-        final appDir = await getApplicationDocumentsDirectory();
-        final logDir = Directory('${appDir.path}/logs');
+        // Usar o diretório raiz do sistema
+        Directory logDir;
+        if (kIsWeb) {
+          final appDir = await getApplicationDocumentsDirectory();
+          logDir = Directory('${appDir.path}/$_logDirectory');
+        } else {
+          // Em dispositivos móveis ou desktop, usar o diretório raiz
+          final appDir = await getApplicationDocumentsDirectory();
+          // Voltar para o diretório raiz
+          final rootDir = Directory(appDir.path).parent.parent.parent.parent;
+          logDir = Directory('${rootDir.path}/$_logDirectory');
+        }
+        
         if (!await logDir.exists()) {
           await logDir.create(recursive: true);
         }
@@ -66,8 +77,6 @@ class LogService {
 
   Future<void> _rotateLogFile() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final logDir = Directory('${appDir.path}/logs');
       final now = DateTime.now();
       final timestamp = '${now.hour}${now.minute}${now.second}';
       final oldFileName = _logFile!.path;
@@ -166,8 +175,18 @@ class LogService {
 
   Future<List<String>> getLogFiles() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final logDir = Directory('${appDir.path}/logs');
+      // Usar o mesmo diretório que em _initialize
+      Directory logDir;
+      if (kIsWeb) {
+        final appDir = await getApplicationDocumentsDirectory();
+        logDir = Directory('${appDir.path}/$_logDirectory');
+      } else {
+        // Em dispositivos móveis ou desktop, usar o diretório raiz
+        final appDir = await getApplicationDocumentsDirectory();
+        final rootDir = Directory(appDir.path).parent.parent.parent.parent;
+        logDir = Directory('${rootDir.path}/$_logDirectory');
+      }
+      
       if (!await logDir.exists()) {
         return [];
       }
@@ -199,6 +218,50 @@ class LogService {
       return 'Erro ao ler arquivo de log: $e';
     }
   }
+  
+  Future<String> getRecentLogs({int maxLines = 100}) async {
+    try {
+      if (kIsWeb) {
+        // Em ambiente web, retornamos os logs armazenados em memória
+        final logs = _webLogs.toList();
+        if (logs.isEmpty) {
+          return 'Nenhum log disponível.';
+        }
+        
+        // Retornar as últimas linhas
+        final startIndex = logs.length > maxLines ? logs.length - maxLines : 0;
+        return logs.sublist(startIndex).join('\n');
+      }
+      
+      // Obter o arquivo de log mais recente
+      final logFiles = await getLogFiles();
+      if (logFiles.isEmpty) {
+        return 'Nenhum arquivo de log encontrado.';
+      }
+      
+      // Ordenar por data de modificação (mais recente primeiro)
+      logFiles.sort((a, b) {
+        final fileA = File(a);
+        final fileB = File(b);
+        return fileB.lastModifiedSync().compareTo(fileA.lastModifiedSync());
+      });
+      
+      // Ler o arquivo mais recente
+      final file = File(logFiles.first);
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final lines = content.split('\n');
+        
+        // Retornar as últimas linhas
+        final startIndex = lines.length > maxLines ? lines.length - maxLines : 0;
+        return lines.sublist(startIndex).join('\n');
+      }
+      
+      return 'Arquivo de log não encontrado.';
+    } catch (e) {
+      return 'Erro ao obter logs recentes: $e';
+    }
+  }
 
   Future<void> clearLogs() async {
     try {
@@ -206,8 +269,11 @@ class LogService {
         // Em ambiente web, limpamos os logs armazenados em memória
         _webLogs.clear();
       } else {
-        final directory = await getApplicationDocumentsDirectory();
-        final logDirectory = Directory('${directory.path}/$_logDirectory');
+        // Usar o mesmo diretório que em _initialize
+        final appDir = await getApplicationDocumentsDirectory();
+        final rootDir = Directory(appDir.path).parent.parent.parent.parent;
+        final logDirectory = Directory('${rootDir.path}/$_logDirectory');
+        
         if (await logDirectory.exists()) {
           await logDirectory.delete(recursive: true);
           await logDirectory.create();

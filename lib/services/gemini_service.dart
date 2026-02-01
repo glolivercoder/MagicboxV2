@@ -48,6 +48,85 @@ class GeminiService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_apiKeyPrefKey) ?? '';
   }
+  
+  /// Reconhece um objeto em uma imagem e retorna informações sobre ele
+  Future<Map<String, dynamic>?> recognizeObject(String imagePath) async {
+    if (!_isInitialized) {
+      await _initialize();
+    }
+    
+    if (_model == null) {
+      _logService.error(
+        'Modelo Gemini não inicializado. Verifique se a chave API está configurada.',
+        category: 'gemini',
+      );
+      return null;
+    }
+    
+    try {
+      _logService.info('Iniciando reconhecimento de objeto', category: 'gemini');
+      
+      final File imageFile = File(imagePath);
+      if (!await imageFile.exists()) {
+        throw Exception('Arquivo de imagem não encontrado: $imagePath');
+      }
+      
+      final bytes = await imageFile.readAsBytes();
+      
+      final prompt = '''
+      Analise esta imagem e identifique o objeto principal presente nela.
+      Forneça as seguintes informações em formato JSON:
+      1. name: nome do objeto em português
+      2. description: uma breve descrição do objeto
+      3. category: uma categoria adequada para o objeto (ex: Eletrônicos, Roupas, Documentos, Livros, etc.)
+      
+      Responda APENAS com o JSON, sem texto adicional.
+      ''';
+      
+      // Criar conteúdo com texto e imagem
+      final content = Content.multi([
+        TextPart(prompt),
+        DataPart('image/jpeg', bytes),
+      ]);
+      
+      final response = await _model!.generateContent([content]);
+      final responseText = response.text;
+      
+      if (responseText == null || responseText.isEmpty) {
+        throw Exception('Resposta vazia do Gemini');
+      }
+      
+      _logService.info('Resposta do Gemini recebida', category: 'gemini');
+      
+      // Extrair o JSON da resposta
+      String jsonStr = responseText;
+      
+      // Remover blocos de código markdown se presentes
+      if (jsonStr.contains('```json')) {
+        jsonStr = jsonStr.replaceAll('```json', '').replaceAll('```', '').trim();
+      } else if (jsonStr.contains('```')) {
+        jsonStr = jsonStr.replaceAll('```', '').trim();
+      }
+      
+      // Tentar fazer o parse do JSON
+      final Map<String, dynamic> objectInfo = json.decode(jsonStr);
+      
+      _logService.info('Objeto reconhecido: ${objectInfo['name']}', category: 'gemini');
+      return objectInfo;
+    } catch (e, stackTrace) {
+      _logService.error(
+        'Erro ao reconhecer objeto',
+        error: e,
+        stackTrace: stackTrace,
+        category: 'gemini',
+      );
+      return {
+        'name': 'Objeto não identificado',
+        'description': 'Não foi possível identificar o objeto na imagem.',
+        'category': 'Diversos'
+      };
+    }
+  }
 
   Future<bool> updateApiKey(String apiKey) async {
     try {
